@@ -23,10 +23,9 @@ def fetch_page():
             viewport={"width": 1280, "height": 800},
         )
         page = context.new_page()
-        page.goto(URL, wait_until="networkidle", timeout=30000)
-        html = page.content()
-        browser.close()
-    return html
+        page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+page.wait_for_timeout(4000)  # let JS render the listings
+html = page.content()
 
 
 def find_available_units(html):
