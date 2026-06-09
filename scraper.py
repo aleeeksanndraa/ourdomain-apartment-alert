@@ -1,89 +1,73 @@
+
 import os
 import json
 import requests
-from bs4 import BeautifulSoup
 from datetime import datetime
 from pathlib import Path
+from playwright.sync_api import sync_playwright
 
 URL = "https://southeast-thisisourdomain.securerc.co.uk/onlineleasing/ourdomain-amsterdam-south-east/floorplans.aspx"
 
-# Exact unit names to watch for (lowercase, partial match)
-TARGET_NAMES = [
-    "studio suite",
-    "1 bedroom",
-]
+TARGET_NAMES = ["studio suite", "1 bedroom"]
 
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 STATUS_FILE      = Path("status.json")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept-Language": "en-GB,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": "https://google.com",
-}
-
 
 def fetch_page():
-    resp = requests.get(URL, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    return resp.text
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale="en-GB",
+            viewport={"width": 1280, "height": 800},
+        )
+        page = context.new_page()
+        page.goto(URL, wait_until="networkidle", timeout=30000)
+        html = page.content()
+        browser.close()
+    return html
 
 
 def find_available_units(html):
-    """
-    Looks for unit cards that:
-      1. Have a name containing 'studio suite' or '1 bedroom'
-      2. Contain '(available)' OR a 'check availability' button
-         — NOT just a 'get notified' button (means unavailable)
-    """
+    from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
     found = []
 
-    # Try to find unit containers — SecureRC sites typically use divs with
-    # class names like 'fpItem', 'floorplan', 'unit', or similar.
-    # We search the full page text block by block.
     candidates = (
         soup.find_all(class_=lambda c: c and any(
             x in c.lower() for x in ["floorplan", "fpitem", "unit", "plan", "suite", "apartment", "listing"]
         ))
-        or soup.find_all("div", recursive=True)  # fallback: all divs
+        or soup.find_all("div", recursive=True)
     )
 
-    # Deduplicate by text to avoid nested div double-counting
     seen = set()
     for el in candidates:
         text = el.get_text(" ", strip=True)
         text_lower = text.lower()
 
-        # Must match one of our target unit names
         matched_name = next((n for n in TARGET_NAMES if n in text_lower), None)
         if not matched_name:
             continue
 
-        # Skip if we've already processed a parent element with same text
         key = text[:120]
         if key in seen:
             continue
         seen.add(key)
 
-        # Determine availability
-        has_available_text   = "(available)" in text_lower
-        has_check_button     = "check availability" in text_lower
-        has_notified_button  = "get notified" in text_lower
+        has_available_text  = "(available)" in text_lower
+        has_check_button    = "check availability" in text_lower
+        has_notified_button = "get notified" in text_lower
 
-        is_available = has_available_text or has_check_button
+        is_available   = has_available_text or has_check_button
         is_unavailable = has_notified_button and not is_available
 
         if is_unavailable:
-            continue  # unit exists but not available — skip
+            continue
 
         if is_available:
-            found.append({
-                "name": text[:200],
-                "matched": matched_name,
-            })
+            found.append({"name": text[:200], "matched": matched_name})
 
     return found
 
@@ -123,15 +107,16 @@ def write_status(units, fetch_ok):
 
 
 def main():
-    print(f"[{datetime.utcnow().strftime('%H:%M:%S')}] Checking page...")
+    print(f"[{datetime.utcnow().strftime('%H:%M:%S')}] Launching browser and checking page...")
     fetch_ok = True
     units = []
 
     try:
         html = fetch_page()
+        print("Page loaded successfully.")
         units = find_available_units(html)
     except Exception as e:
-        print(f"Fetch failed: {e}")
+        print(f"Error: {e}")
         fetch_ok = False
 
     write_status(units, fetch_ok)
