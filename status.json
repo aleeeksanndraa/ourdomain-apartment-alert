@@ -1,0 +1,13 @@
+{
+  "last_checked": "2026-06-09T20:26:52Z",
+  "total_checks": 1,
+  "total_alerts": 0,
+  "history": [
+    {
+      "time": "2026-06-09T20:26:52Z",
+      "ok": false,
+      "count": 0,
+      "units": []
+    }
+  ]
+}
